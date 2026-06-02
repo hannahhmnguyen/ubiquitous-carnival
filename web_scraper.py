@@ -104,10 +104,25 @@ def find_contact_pages(base_url, soup):
     return candidates[:6]
 
 
+INVALID_EMAIL_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp",
+    ".pdf", ".zip", ".js", ".css", ".woff", ".ttf", ".eot",
+}
+
+
 def extract_emails(text):
     found = EMAIL_RE.findall(text)
-    # filter out image/asset false positives
-    return [e for e in found if not any(e.endswith(x) for x in [".png", ".jpg", ".gif", ".svg"])]
+    result = []
+    for e in found:
+        el = e.lower()
+        if any(el.endswith(ext) for ext in INVALID_EMAIL_EXTENSIONS):
+            continue
+        # domain part must have at least one real letter TLD (no numbers-only domain)
+        domain = el.split("@")[-1]
+        if re.search(r"\d{4,}", domain):
+            continue
+        result.append(e)
+    return result
 
 
 def extract_phones(text):
@@ -116,7 +131,15 @@ def extract_phones(text):
     out = []
     for p in found:
         clean = re.sub(r"\D", "", p)
-        if clean not in seen and len(clean) == 10:
+        if len(clean) != 10:
+            continue
+        # US area codes never start with 0 or 1
+        if clean[0] in ("0", "1"):
+            continue
+        # exchange codes never start with 0 or 1 either
+        if clean[3] in ("0", "1"):
+            continue
+        if clean not in seen:
             seen.add(clean)
             out.append(p.strip())
     return out
@@ -128,15 +151,34 @@ BUSINESS_WORDS = {
     "practice", "office", "studio", "spa", "medspa", "aesthetics",
 }
 
+# Common UI/nav/CTA words that should never be mistaken for a name
+UI_WORDS = {
+    "about", "us", "now", "more", "learn", "book", "contact", "home",
+    "services", "team", "our", "meet", "get", "start", "sign", "view",
+    "see", "call", "click", "read", "next", "back", "new", "all",
+    "clinical", "trials", "schedule", "appointment", "today", "here",
+    "privacy", "policy", "terms", "login", "register", "submit", "send",
+    "yes", "no", "ok", "cancel", "close", "open", "menu", "search",
+}
+
 
 def looks_like_name(text):
-    """Return True if text looks like a person's name (2-4 title-case words, no business words)."""
-    words = text.strip().split()
+    """Return True if text looks like a person's name (2-4 title-case words)."""
+    text = text.strip()
+    # must not contain digits or common punctuation (except hyphens in names)
+    if re.search(r"[\d@/\\|]", text):
+        return False
+    words = text.split()
     if not 2 <= len(words) <= 4:
         return False
+    # each word must start with a capital letter
     if not all(w[0].isupper() for w in words if w[0].isalpha()):
         return False
-    if any(w.lower() in BUSINESS_WORDS for w in words):
+    # reject if any word is a known business or UI word
+    lwords = {w.lower().strip(".,;:!?") for w in words}
+    if lwords & BUSINESS_WORDS:
+        return False
+    if lwords & UI_WORDS:
         return False
     # reject lines that are mostly punctuation or numbers
     if sum(c.isalpha() for c in text) < 4:

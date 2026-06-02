@@ -182,7 +182,7 @@ def run(input_path, api_key, output_path, batch_size):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
-    parser.add_argument("--api-key", default="DzmJf2rVwVn4rysfBMF6Ow")
+    parser.add_argument("--api-key", required=True)
     parser.add_argument("--output", default="Exec_Contacts.xlsx")
     parser.add_argument("--batch", type=int, default=5)
     args = parser.parse_args()

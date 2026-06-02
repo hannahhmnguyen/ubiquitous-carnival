@@ -30,10 +30,15 @@ CONTACT_PAGE_HINTS = [
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 PHONE_RE = re.compile(r"(\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})")
 
-NAME_TITLE_KEYWORDS = [
-    "md", "do", "np", "pa", "rn", "fnp", "aprn",
-    "founder", "owner", "director", "ceo", "president", "physician",
-    "doctor", "dr.", "dr ",
+EXEC_TITLE_KEYWORDS = [
+    "ceo", "chief executive", "founder", "co-founder", "owner", "co-owner",
+    "president", "medical director", "executive director", "managing director",
+    "managing partner", "partner",
+]
+
+PROVIDER_TITLE_KEYWORDS = [
+    "md", "d.o.", " do,", " do ", "np-c", " np,", " np ", "fnp", "aprn",
+    "physician", "doctor", "dr.", "dr ",
 ]
 
 
@@ -117,21 +122,103 @@ def extract_phones(text):
     return out
 
 
+BUSINESS_WORDS = {
+    "clinic", "center", "medical", "wellness", "health", "care", "institute",
+    "group", "associates", "services", "solutions", "therapy", "treatment",
+    "practice", "office", "studio", "spa", "medspa", "aesthetics",
+}
+
+
+def looks_like_name(text):
+    """Return True if text looks like a person's name (2-4 title-case words, no business words)."""
+    words = text.strip().split()
+    if not 2 <= len(words) <= 4:
+        return False
+    if not all(w[0].isupper() for w in words if w[0].isalpha()):
+        return False
+    if any(w.lower() in BUSINESS_WORDS for w in words):
+        return False
+    # reject lines that are mostly punctuation or numbers
+    if sum(c.isalpha() for c in text) < 4:
+        return False
+    return True
+
+
 def extract_name_from_soup(soup):
-    """Best-effort: find a person name near a title keyword."""
+    """
+    Find the CEO/founder/owner/medical director name.
+    Strategy:
+    1. Check JSON-LD schema for founder/employee with exec title.
+    2. Look for HTML patterns: element with exec title adjacent to a name element.
+    3. Fall back to line-by-line scan prioritising exec titles over provider titles.
+    """
+    import json
+
+    # 1. JSON-LD schema.org
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(tag.string or "")
+            entries = data if isinstance(data, list) else [data]
+            for entry in entries:
+                for field in ("founder", "employee", "member", "author", "person"):
+                    person = entry.get(field)
+                    if isinstance(person, dict):
+                        n = person.get("name", "")
+                        if n and looks_like_name(n):
+                            return n
+                    elif isinstance(person, list):
+                        for p in person:
+                            if isinstance(p, dict):
+                                n = p.get("name", "")
+                                if n and looks_like_name(n):
+                                    return n
+        except Exception:
+            pass
+
+    # 2. HTML structural pattern: find elements whose text is an exec title,
+    #    then check sibling/parent/nearby elements for a name.
+    all_tags = soup.find_all(["h1", "h2", "h3", "h4", "h5", "p", "span", "div", "li"])
+    for tag in all_tags:
+        tag_text = tag.get_text(strip=True)
+        if len(tag_text) > 80:
+            continue
+        tl = tag_text.lower()
+        if any(kw in tl for kw in EXEC_TITLE_KEYWORDS):
+            # check previous and next siblings, and parent's children
+            candidates = []
+            for sibling in [tag.find_previous_sibling(), tag.find_next_sibling()]:
+                if sibling:
+                    candidates.append(sibling.get_text(strip=True))
+            if tag.parent:
+                for child in tag.parent.children:
+                    if hasattr(child, "get_text"):
+                        candidates.append(child.get_text(strip=True))
+            for c in candidates:
+                if c and looks_like_name(c):
+                    return c
+
+    # 3. Line-by-line fallback — exec titles first, then provider titles
     text = soup.get_text(separator="\n")
     lines = [l.strip() for l in text.splitlines() if l.strip()]
-    for i, line in enumerate(lines):
-        ll = line.lower()
-        if any(kw in ll for kw in NAME_TITLE_KEYWORDS):
-            # look at surrounding lines for a name-like string (2-4 words, title case)
-            for candidate in lines[max(0, i-2):i+3]:
-                words = candidate.split()
-                if 2 <= len(words) <= 4 and all(w[0].isupper() for w in words if w[0].isalpha()):
-                    # skip lines that are just titles/keywords
-                    if not any(kw in candidate.lower() for kw in ["clinic", "center", "medical", "wellness", "health"]):
+
+    def scan_lines(keywords):
+        for i, line in enumerate(lines):
+            ll = line.lower()
+            if any(kw in ll for kw in keywords):
+                for candidate in lines[max(0, i - 3):i + 4]:
+                    if candidate != line and looks_like_name(candidate):
                         return candidate
-    return ""
+                # also check if the title line itself starts with a name
+                # e.g. "Jane Smith, Founder"
+                before_comma = line.split(",")[0].strip()
+                if looks_like_name(before_comma):
+                    return before_comma
+        return ""
+
+    result = scan_lines(EXEC_TITLE_KEYWORDS)
+    if result:
+        return result
+    return scan_lines(PROVIDER_TITLE_KEYWORDS)
 
 
 def scrape_site(base_url):

@@ -300,7 +300,7 @@ def write_output(results, output_path):
 # Main
 # ---------------------------------------------------------------------------
 
-def run(input_path, output_path, batch_size, skip_rows):
+def run(input_path, output_path, batch_size, skip_rows, only_rows):
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise SystemExit("ERROR: Set ANTHROPIC_API_KEY environment variable first.")
@@ -313,7 +313,10 @@ def run(input_path, output_path, batch_size, skip_rows):
     print(f"Total rows: {len(companies)}")
     print(f"Rows missing name: {len(missing)}")
 
-    if skip_rows:
+    if only_rows:
+        missing = [c for c in missing if c["row"] in only_rows]
+        print(f"Processing only rows: {sorted(only_rows)}")
+    elif skip_rows:
         missing = [c for c in missing if c["row"] not in skip_rows]
         print(f"After skip: {len(missing)} to process")
 
@@ -358,7 +361,9 @@ if __name__ == "__main__":
     parser.add_argument("--output",  default="CEO_Results.xlsx", help="Output .xlsx file path")
     parser.add_argument("--batch",   type=int, default=10,    help="Max rows to process (default 10)")
     parser.add_argument("--skip",    type=str, default="",    help="Comma-separated row numbers to skip")
+    parser.add_argument("--only",    type=str, default="",    help="Only process these comma-separated row numbers")
     args = parser.parse_args()
 
     skip_set = set(int(x.strip()) for x in args.skip.split(",") if x.strip())
-    run(args.input, args.output, args.batch, skip_set)
+    only_set = set(int(x.strip()) for x in args.only.split(",") if x.strip())
+    run(args.input, args.output, args.batch, skip_set, only_set)

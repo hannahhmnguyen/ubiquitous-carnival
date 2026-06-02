@@ -41,6 +41,19 @@ PROVIDER_TITLE_KEYWORDS = [
     "physician", "doctor", "dr.", "dr ",
 ]
 
+NAME_PART = r"[A-Z][a-z'\-]{1,20}"
+FULL_NAME = rf"{NAME_PART}(?:\s+{NAME_PART}){{1,3}}"
+
+# Patterns that strongly indicate a real person name
+NAME_PATTERNS = [
+    # Dr. Jane Smith  /  Dr Jane Smith
+    re.compile(rf"\bDr\.?\s+({FULL_NAME})\b"),
+    # Jane Smith, MD / DO / NP / PA / APRN / FNP
+    re.compile(rf"\b({FULL_NAME}),?\s+(?:MD|DO|NP|PA|APRN|FNP|RN|FACP|FACOG)\b"),
+    # Jane Smith, Founder / CEO / Owner / President / Director
+    re.compile(rf"\b({FULL_NAME}),?\s+(?:Founder|Co-Founder|CEO|Owner|President|Director|Partner)\b", re.IGNORECASE),
+]
+
 
 def get_companies(path):
     wb = openpyxl.load_workbook(path, data_only=True)
@@ -141,7 +154,7 @@ def extract_phones(text):
             continue
         if clean not in seen:
             seen.add(clean)
-            out.append(p.strip())
+            out.append(f"({clean[0:3]}) {clean[3:6]}-{clean[6:]}")
     return out
 
 
@@ -190,13 +203,22 @@ def extract_name_from_soup(soup):
     """
     Find the CEO/founder/owner/medical director name.
     Strategy:
-    1. Check JSON-LD schema for founder/employee with exec title.
-    2. Look for HTML patterns: element with exec title adjacent to a name element.
-    3. Fall back to line-by-line scan prioritising exec titles over provider titles.
+    1. Regex patterns on full page text — looks for "Dr. Jane Smith",
+       "Jane Smith, MD", "Jane Smith, Founder" etc.
+    2. JSON-LD schema.org founder/employee fields.
+    3. HTML structure — exec title element adjacent to a name element.
     """
     import json
 
-    # 1. JSON-LD schema.org
+    page_text = soup.get_text(separator=" ")
+
+    # 1. Regex patterns — most reliable, requires explicit title context
+    for pattern in NAME_PATTERNS:
+        m = pattern.search(page_text)
+        if m:
+            return m.group(1).strip()
+
+    # 2. JSON-LD schema.org
     for tag in soup.find_all("script", type="application/ld+json"):
         try:
             data = json.loads(tag.string or "")
@@ -217,16 +239,12 @@ def extract_name_from_soup(soup):
         except Exception:
             pass
 
-    # 2. HTML structural pattern: find elements whose text is an exec title,
-    #    then check sibling/parent/nearby elements for a name.
-    all_tags = soup.find_all(["h1", "h2", "h3", "h4", "h5", "p", "span", "div", "li"])
-    for tag in all_tags:
+    # 3. HTML structure — exec title tag adjacent to a name-like sibling
+    for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "p", "span", "div", "li"]):
         tag_text = tag.get_text(strip=True)
         if len(tag_text) > 80:
             continue
-        tl = tag_text.lower()
-        if any(kw in tl for kw in EXEC_TITLE_KEYWORDS):
-            # check previous and next siblings, and parent's children
+        if any(kw in tag_text.lower() for kw in EXEC_TITLE_KEYWORDS):
             candidates = []
             for sibling in [tag.find_previous_sibling(), tag.find_next_sibling()]:
                 if sibling:
@@ -239,28 +257,7 @@ def extract_name_from_soup(soup):
                 if c and looks_like_name(c):
                     return c
 
-    # 3. Line-by-line fallback — exec titles first, then provider titles
-    text = soup.get_text(separator="\n")
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-
-    def scan_lines(keywords):
-        for i, line in enumerate(lines):
-            ll = line.lower()
-            if any(kw in ll for kw in keywords):
-                for candidate in lines[max(0, i - 3):i + 4]:
-                    if candidate != line and looks_like_name(candidate):
-                        return candidate
-                # also check if the title line itself starts with a name
-                # e.g. "Jane Smith, Founder"
-                before_comma = line.split(",")[0].strip()
-                if looks_like_name(before_comma):
-                    return before_comma
-        return ""
-
-    result = scan_lines(EXEC_TITLE_KEYWORDS)
-    if result:
-        return result
-    return scan_lines(PROVIDER_TITLE_KEYWORDS)
+    return ""
 
 
 def scrape_site(base_url):

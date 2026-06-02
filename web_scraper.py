@@ -42,16 +42,19 @@ PROVIDER_TITLE_KEYWORDS = [
 ]
 
 NAME_PART = r"[A-Z][a-z'\-]{1,20}"
-FULL_NAME = rf"{NAME_PART}(?:\s+{NAME_PART}){{1,3}}"
+# First Last or First Middle Last only — no more than 3 words
+FULL_NAME = rf"{NAME_PART}(?: {NAME_PART}){{1,2}}"
 
-# Patterns that strongly indicate a real person name
+# Patterns matched against individual lines — requires explicit title context
 NAME_PATTERNS = [
     # Dr. Jane Smith  /  Dr Jane Smith
-    re.compile(rf"\bDr\.?\s+({FULL_NAME})\b"),
-    # Jane Smith, MD / DO / NP / PA / APRN / FNP
-    re.compile(rf"\b({FULL_NAME}),?\s+(?:MD|DO|NP|PA|APRN|FNP|RN|FACP|FACOG)\b"),
+    re.compile(rf"^Dr\.?\s+({FULL_NAME})$"),
+    # Jane Smith, MD / DO / NP / PA / APRN / FNP  (anywhere on line)
+    re.compile(rf"\b({FULL_NAME}),?\s*(?:MD|DO|NP|PA|APRN|FNP|RN|FACP|FACOG)\b"),
     # Jane Smith, Founder / CEO / Owner / President / Director
-    re.compile(rf"\b({FULL_NAME}),?\s+(?:Founder|Co-Founder|CEO|Owner|President|Director|Partner)\b", re.IGNORECASE),
+    re.compile(rf"\b({FULL_NAME}),?\s*(?:Founder|Co-Founder|CEO|Owner|President|Director|Partner)\b", re.IGNORECASE),
+    # Founder/CEO/Owner: Jane Smith  (title comes first)
+    re.compile(rf"(?:Founder|CEO|Owner|President|Medical Director|Director)[:\s]+({FULL_NAME})\s*$", re.IGNORECASE),
 ]
 
 
@@ -210,13 +213,14 @@ def extract_name_from_soup(soup):
     """
     import json
 
-    page_text = soup.get_text(separator=" ")
+    lines = [l.strip() for l in soup.get_text(separator="\n").splitlines() if l.strip()]
 
-    # 1. Regex patterns — most reliable, requires explicit title context
-    for pattern in NAME_PATTERNS:
-        m = pattern.search(page_text)
-        if m:
-            return m.group(1).strip()
+    # 1. Regex patterns line by line — requires explicit title context on same line
+    for line in lines:
+        for pattern in NAME_PATTERNS:
+            m = pattern.search(line)
+            if m:
+                return m.group(1).strip()
 
     # 2. JSON-LD schema.org
     for tag in soup.find_all("script", type="application/ld+json"):

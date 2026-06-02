@@ -239,24 +239,6 @@ def extract_name_from_soup(soup):
         except Exception:
             pass
 
-    # 3. HTML structure — exec title tag adjacent to a name-like sibling
-    for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "p", "span", "div", "li"]):
-        tag_text = tag.get_text(strip=True)
-        if len(tag_text) > 80:
-            continue
-        if any(kw in tag_text.lower() for kw in EXEC_TITLE_KEYWORDS):
-            candidates = []
-            for sibling in [tag.find_previous_sibling(), tag.find_next_sibling()]:
-                if sibling:
-                    candidates.append(sibling.get_text(strip=True))
-            if tag.parent:
-                for child in tag.parent.children:
-                    if hasattr(child, "get_text"):
-                        candidates.append(child.get_text(strip=True))
-            for c in candidates:
-                if c and looks_like_name(c):
-                    return c
-
     return ""
 
 
